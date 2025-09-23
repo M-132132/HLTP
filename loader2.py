@@ -6,6 +6,7 @@ import numpy as np
 import torch
 from config import args
 import time
+import os
 import warnings
 
 warnings.filterwarnings("ignore", category=UserWarning)
@@ -13,27 +14,65 @@ warnings.filterwarnings("ignore", category=UserWarning)
 
 class ngsimDataset(Dataset):
 
-    def __init__(self, mat_file, t_h=30, t_f=25, d_s=1, t_h_stu=30, t_f_stu=50, d_s_stu=2, enc_size=64,
-                 grid_size=(13, 3)):
+    # def __init__(self, mat_file, t_h=30, t_f=25, d_s=1, t_h_stu=30, t_f_stu=50, d_s_stu=2, enc_size=64,
+    #              grid_size=(13, 3)):
+    #
+    #     self.D = scp.loadmat(mat_file)['traj']
+    #     self.T = scp.loadmat(mat_file)['tracks']
+    #
+    #     self.t_h = t_h
+    #     self.t_f = t_f
+    #     self.d_s = d_s
+    #
+    #     self.t_h_stu = t_h_stu
+    #     self.t_f_stu = t_f_stu
+    #     self.d_s_stu = d_s_stu
+    #
+    #     self.enc_size = enc_size
+    #     self.grid_size = grid_size
+    #
+    # def __len__(self):
+    #     return len(self.D)
 
-        self.D = scp.loadmat(mat_file)['traj']
-        self.T = scp.loadmat(mat_file)['tracks']
+    def __init__(self, mat_file,
+                 t_h=30, t_f=25, d_s=1,
+                 t_h_stu=30, t_f_stu=50, d_s_stu=2,
+                 enc_size=64, grid_size=(13, 3)):
 
+        # 只保存路径，不在 __init__ 里大规模加载数据
+        self.mat_file = mat_file
+
+        # 轻量索引信息提前读出
+        mat_data = scp.loadmat(mat_file, variable_names=['traj'])
+        self.D = mat_data['traj']  # 轨迹索引
+        self.T = None
         self.t_h = t_h
         self.t_f = t_f
         self.d_s = d_s
-
         self.t_h_stu = t_h_stu
         self.t_f_stu = t_f_stu
         self.d_s_stu = d_s_stu
-
         self.enc_size = enc_size
         self.grid_size = grid_size
+
+    def _load_tracks(self):
+                                                                                               #"""按需加载 tracks 数据到内存（每个进程自己加载一次）"""
+        if self.T is None:
+            print(f"Loading tracks in PID {os.getpid()}...")
+            self.T = scp.loadmat(self.mat_file, variable_names=['tracks'])['tracks']
 
     def __len__(self):
         return len(self.D)
 
+    def get_batch(self, indices):
+        """批量获取数据"""
+        return [self[i] for i in indices]
+
     def __getitem__(self, idx):
+
+        if self.T is None:
+            self._load_tracks()
+
 
         dsId = self.D[idx, 0].astype(int)
         vehId = self.D[idx, 1].astype(int)
