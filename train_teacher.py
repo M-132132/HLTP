@@ -8,9 +8,46 @@ from teacher_model.teacher_model import highwayNet
 from loader2 import ngsimDataset
 from torch.utils.data import DataLoader
 import time
+import os
+
+import re
+
+def extract_part_num(filename):
+    # 从 TrainSet_tensor_partX.pt 里提取 X
+    match = re.search(r'part(\d+)\.pt$', filename)
+    return int(match.group(1)) if match else float('inf')
+
+# ===== 新的数据集类 =====
+class PtDataset(torch.utils.data.Dataset):
+    def __init__(self, pt_dir):
+        self.data = []
+        # 读取并合并所有分片文件
+        #pt_files = sorted([os.path.join(pt_dir, f) for f in os.listdir(pt_dir) if f.endswith('.pt')])
+
+        pt_files = sorted(
+            [os.path.join(pt_dir, f) for f in os.listdir(pt_dir) if f.endswith('.pt')],
+            key=extract_part_num
+        )
+
+        print(f"[INFO] Loading {len(pt_files)} .pt files from {pt_dir} ...")
+        for f in pt_files:
+            print(f"[INFO] Loading {f}")
+            part_data = torch.load(f, weights_only=False)
+            self.data.extend(part_data)
+        print(f"[INFO] Total samples loaded: {len(self.data)}")
+
+        # NOTE: 单条样本结构是 ngsimDataset.__getitem__ 的返回值
+        # collate_fn 必须保持原有的拼接逻辑，因此我们复用 ngsimDataset 的 collate_fn
+        self.collate_fn = ngsimDataset.collate_fn
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, idx):
+        return self.data[idx]
 
 
-def train_main():
+def train_main(trDataloader):
     args = {}
     args['use_cuda'] = True
     args['encoder_size'] = 64
@@ -40,7 +77,7 @@ def train_main():
     if args['use_cuda']:
         net = net.to(device)
 
-    ### 训练参数配置
+    ### 训练参数
     pretrainEpochs = 4
     trainEpochs = 12
     optimizer = torch.optim.Adam(net.parameters(), lr=0.0005)
@@ -49,21 +86,6 @@ def train_main():
         T_max=(pretrainEpochs + trainEpochs)
     )
     lr = []
-    batch_size = 128
-
-    # ### 数据加载器设置（放在 main 里，保证 Windows 多进程安全）
-    # trSet = ngsimDataset('../HLTP/TrainSet.mat')
-    # trDataloader = DataLoader(
-    #     trSet,
-    #     batch_size=batch_size,
-    #     shuffle=True,
-    #     num_workers=4,  # Windows 优化，建议 4 或 CPU 核心 - 1
-    #     drop_last=True,
-    #     persistent_workers=True,  # 多进程保持存活，加速下一个 epoch
-    #     prefetch_factor=2,        # 不要太大，防止 Windows 卡死
-    #     collate_fn=trSet.collate_fn,
-    #     pin_memory=True
-    # )
 
     ### 训练循环
     for epoch_num in range(pretrainEpochs + trainEpochs):
@@ -156,23 +178,20 @@ def train_main():
 
 
 if __name__ == '__main__':
-    # mp.set_start_method('spawn', force=True)  # Windows 多进程安全启动
-    # train_main()
-
-    import torch.multiprocessing as mp
     mp.set_start_method('spawn', force=True)
 
-    trSet = ngsimDataset('../HLTP/TrainSet.mat')
+    # 使用新的 PtDataset 代替 ngsimDataset
+    pt_dataset = PtDataset('../HLTP/train_pt_parts')
     trDataloader = DataLoader(
-        trSet,
+        pt_dataset,
         batch_size=128,
         shuffle=True,
         num_workers=12,
         drop_last=True,
         persistent_workers=True,
         prefetch_factor=3,
-        collate_fn=trSet.collate_fn,
+        collate_fn=pt_dataset.collate_fn,  # 保持原 collate_fn
         pin_memory=True
     )
 
-    train_main()
+    train_main(trDataloader)
